@@ -140,9 +140,6 @@ void loop() {
     }
     
     checkMoisture();
-  
-    // if ssid and password are not the same with the one from request
-    // relace them, save in eeprom and disconnect wifi
   }
 
   Serial.println("------------------------------------------");
