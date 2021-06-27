@@ -294,7 +294,7 @@ String http_request_update() {
   int triangle = random(21, 30);
   int key = calculate_key(circle, square, triangle);
   
-  http.begin(client, update_endpoint + "?code=" + (String)SERIAL_NUMBER + "&ci=" + circle + "&sq=" + square + "&tr=" + triangle + "&soil=" + moisture_value + "&temperature=" + temperature + "&humidity=" + humidity);
+  http.begin(client, update_endpoint + "?code=" + (String)SERIAL_NUMBER + "&ci=" + circle + "&sq=" + square + "&tr=" + triangle + "&soil=" + moisture_percent + "&temperature=" + temperature + "&humidity=" + humidity);
   http.addHeader("Content-Type", "application/x-www-form-urlencoded");
   http.addHeader("Token", "Key " + (String)key);
   
