@@ -2,11 +2,12 @@
 #include "EEPROM.h"
 #include "ESP8266HTTPClient.h"
 #include "ArduinoJson.h"
+#include "DHT.h"
 
 // CONSTANTS
 
 // SERIAL NUMBER
-#define SERIAL_NUMBER               "123456654321"
+#define SERIAL_NUMBER               "WP-0001-0001"
 
 // KEY
 #define KEY                         10021986
@@ -18,8 +19,11 @@
 #define ENDPOINT_UPDATE             "/device_api/update"
 
 // umiditate a solului
-#define MOISTURE_THRESHOLD          35
-#define WATER_FOR                   3000 // 3 seconds
+#define MOISTURE_THRESHOLD          20 // in percent; 0% - 100% humidity => 430 - 120
+#define POMP_RUNNING_TIME           5 // 5 seconds
+
+// temperatura
+#define DHTTYPE                     DHT22
 
 // VARIABLES
 
@@ -32,6 +36,7 @@ const int addr_ssid_size =          20; // ssid index size
 const int addr_password =           20; // password index
 const int addr_password_size =      20; // password index size
 const int addr_moisture =           40; // humidity index
+const int addr_pomp =               41; // pomp running time
 
 String ssid =                       NET_SSID;
 String password =                   NET_PASS;
@@ -46,19 +51,32 @@ bool default_network_flag =         false;
 const int moisture_Pin =            0;
 const int nivel_apa =               1;
 const int relay =                   5;
+const int DHTPin =                  4; 
 
 // request
 const int request_timing =          15; // request every 15 seconds
-int request_timing_count =          15;
+int request_timing_start =          12;
+int request_timing_count =          request_timing_start;
 
 // sensors
+// soil
 int moisture_value =                0;
+int moisture_percent =              100;
 int moisture_threshold =            MOISTURE_THRESHOLD;
-const int moisture_threshold_max =  50;
+const int moisture_threshold_max =  50; // in percent
+const int moisture_max =            130; // max humidity - immersed in watter
+const int moisture_min =            430; // min humidity - perfectly dry
 
-bool start_water =                  false;
-int start_water_for =               WATER_FOR;
+// pomp
+bool start_pomp =                   false;
+int pomp_running_time =             POMP_RUNNING_TIME;
 
+// DHT22 variables
+float temperature;
+float humidity;
+
+// initialize
+DHT dht(DHTPin, DHTTYPE);
 HTTPClient http;
 WiFiClient client;
 
@@ -67,6 +85,11 @@ void setup() {
 
   // pinul pentru releu
   pinMode(relay, OUTPUT);
+
+  // pinul pentru temperatura
+  pinMode(DHTPin, INPUT);
+
+  dht.begin();
 
   delay(1000);
 
@@ -85,7 +108,7 @@ void setup() {
   }
 
   int moisture_threshold_read = EEPROM.read(addr_moisture);
-  Serial.println("Moisture threshold: " + moisture_threshold_read);
+  int pomp_running_time_read = EEPROM.read(addr_pomp);
   EEPROM.end();
 
   // set ssid and password if needed
@@ -103,18 +126,31 @@ void setup() {
 
   // set moisture threashold
   if (moisture_threshold_read) {
-    Serial.println("Moisture threshold from EEPROM diferent");
+    Serial.println("Moisture threshold from EEPROM different");
     Serial.print("Moisture threshold: " + moisture_threshold);
     
     moisture_threshold = (int)moisture_threshold_read;
 
-    Serial.print(" / NEW Moisture threshold (taken from EEPROM): " + moisture_threshold);
+    Serial.println(" / NEW Moisture threshold (taken from EEPROM): " + moisture_threshold);
+  }
+
+  // set pomp running time
+  if (pomp_running_time_read) {
+    Serial.println("Pomp running time from EEPROM different");
+    Serial.print("Pomp running time: " + pomp_running_time);
+    
+    pomp_running_time = (int)pomp_running_time_read;
+
+    Serial.println(" / NEW Pomp running time (taken from EEPROM): " + pomp_running_time);
   }
 
   WiFi.mode(WIFI_STA);
 }
 
 void loop() {
+  //wifi_set_sleep_type(NONE_SLEEP_T);
+  //delay(100);
+  
   Serial.print("SSID = ");
   Serial.println(ssid);
 
@@ -123,6 +159,12 @@ void loop() {
 
   Serial.print("Moisture = ");
   Serial.println(moisture_threshold);
+
+  Serial.print("Pomp running time = ");
+  Serial.println(pomp_running_time);
+
+  checkMoisture();
+  checkTemperature();
   
   if (WiFi.status() != WL_CONNECTED) {
     connect_to_wifi();
@@ -138,71 +180,111 @@ void loop() {
     } else {
       request_timing_count += 1;
     }
-    
-    checkMoisture();
   }
 
   Serial.println("------------------------------------------");
-  
+
   delay(1000);
+ 
+  //wifi_set_sleep_type(LIGHT_SLEEP_T);
+  //delay(4900);
+
+  // put the board to sleep for 5 minutes
+  // ESP.deepSleep(5e6);
 }
 
 // request
 
 void server_request() {
   bool disconnect_from_network = false;
-  
-  DynamicJsonDocument doc(1024);
-  deserializeJson(doc, http_request_update());
+  String payload = http_request_update();
 
-  String netname = doc["netname"];
+  if (payload != "{}") {
+    DynamicJsonDocument doc(1024);
+    deserializeJson(doc, payload);
+    
+    Serial.print("payload: ");
+    Serial.println(payload);
   
-  if (netname != ssid) {
-    ssid = netname;
-    disconnect_from_network = true;
-
-    EEPROM.begin(512);
-    int i = 0;
-    for (int k = addr_ssid; k < addr_ssid + addr_ssid_size; k++) {
-      EEPROM.write(k, ssid[i]);
-      i++;
+    int status = doc["status"];
+  
+    Serial.print("status: ");
+    Serial.println(status);
+  
+    if (status == 1) {
+      // save netword ssid if needed
+      String netname = doc["netname"];
+  
+      Serial.print("netname: ");
+      Serial.println(netname);
+      
+      if (netname != "null" && netname != ssid) {
+        ssid = netname;
+        disconnect_from_network = true;
+    
+        EEPROM.begin(512);
+        int i = 0;
+        for (int k = addr_ssid; k < addr_ssid + addr_ssid_size; k++) {
+          EEPROM.write(k, ssid[i]);
+          i++;
+        }
+        EEPROM.end();
+      }
+    
+      // save network password if needed
+      String netpass = doc["netpass"];
+  
+      Serial.print("netpass: ");
+      Serial.println(netpass);
+      
+      if (netpass != "null" && netpass != password) {
+        password = netpass;
+        disconnect_from_network = true;
+    
+        EEPROM.begin(512);
+        int i = 0;
+        for (int k = addr_password; k < addr_password + addr_password_size; k++) {
+          EEPROM.write(k, password[i]);
+          i++;
+        }
+        EEPROM.end();
+      }
+    
+      // disconnect and reconnect to network if one of the above was changed
+      if (disconnect_from_network == true) {
+        WiFi.disconnect();
+        connect_to_wifi();
+      }
+    
+      // save moisture threshold if needed
+      int limit = doc["limit"];
+      
+      if (limit != moisture_threshold && limit <= moisture_threshold_max) {
+        moisture_threshold = limit;
+    
+        EEPROM.begin(512);
+        EEPROM.put(addr_moisture, moisture_threshold);
+        EEPROM.end();
+      }
+  
+      // save pomp running time if needed
+      int duration = doc["duration"];
+      
+      if (duration != pomp_running_time) {
+        pomp_running_time = duration;
+    
+        EEPROM.begin(512);
+        EEPROM.put(addr_pomp, pomp_running_time);
+        EEPROM.end();
+      }
+    
+      // update pomp flag if needed
+      bool pomp = doc["pomp"];
+    
+      if (pomp == true) {
+        start_pomp = pomp;
+      }
     }
-    EEPROM.end();
-  }
-
-  String netpass = doc["netpass"];
-  
-  if (netpass != password) {
-    password = netpass;
-    disconnect_from_network = true;
-
-    EEPROM.begin(512);
-    int i = 0;
-    for (int k = addr_password; k < addr_password + addr_password_size; k++) {
-      EEPROM.write(k, password[i]);
-      i++;
-    }
-    EEPROM.end();
-  }
-
-  if (disconnect_from_network == true) {
-    WiFi.disconnect();
-  }
-
-  int limit = ((double)doc["limit"] / 100) * moisture_threshold_max;
-  
-  if (limit != moisture_threshold) {
-    moisture_threshold = limit;
-
-    EEPROM.begin(512);
-    EEPROM.put(addr_moisture, moisture_threshold);
-    EEPROM.end();
-  }
-
-  bool water = doc["water"];
-
-  if (water == true) {
-    start_water = water;
   }
 }
 
@@ -212,7 +294,7 @@ String http_request_update() {
   int triangle = random(21, 30);
   int key = calculate_key(circle, square, triangle);
   
-  http.begin(client, update_endpoint + "?code=" + (String)SERIAL_NUMBER + "&ci=" + circle + "&sq=" + square + "&tr=" + triangle + "&humidity=" + moisture_value);
+  http.begin(client, update_endpoint + "?code=" + (String)SERIAL_NUMBER + "&ci=" + circle + "&sq=" + square + "&tr=" + triangle + "&soil=" + moisture_value + "&temperature=" + temperature + "&humidity=" + humidity);
   http.addHeader("Content-Type", "application/x-www-form-urlencoded");
   http.addHeader("Token", "Key " + (String)key);
   
@@ -228,7 +310,7 @@ String http_request_update() {
   } else {
     Serial.print("Error code: ");
     Serial.println(httpResponseCode);
-    Serial.printf("[HTTP] POST... failed, error: %s\n", http.errorToString(httpResponseCode).c_str());
+    Serial.printf("[HTTP] GET failed, error: %s\n", http.errorToString(httpResponseCode).c_str());
   }
   
   http.end();
@@ -239,22 +321,46 @@ String http_request_update() {
 // soil humidity
 
 void checkMoisture() {
-  Serial.print("Nivel umiditate sol : ");
   moisture_value = analogRead(moisture_Pin);
-  moisture_value = moisture_value/10;
+  moisture_percent = abs((((double)(moisture_value - moisture_max) / (moisture_min - moisture_max)) * 100) - 100);
+  
+  Serial.print("Soil humidity: ");
   Serial.println(moisture_value);
 
-  if (moisture_value > moisture_threshold || start_water){
+  Serial.print("Soil humidity %: ");
+  Serial.println(moisture_percent);
+
+  if (start_pomp) {
+    Serial.println("Start water pomp");
+    Serial.print("For (seconds) = ");
+    Serial.println(pomp_running_time);
+    digitalWrite(relay, HIGH);
+    delay(pomp_running_time * 1000);
+    Serial.println("Water stop and resume execution");
+    start_pomp = false;
+    digitalWrite(relay, LOW);
+  }
+
+  if (moisture_percent < moisture_threshold){
     digitalWrite(relay, HIGH);
     Serial.println("Current Flowing");
-
-    if (start_water) {
-      delay(start_water_for);
-    }
   } else {
     digitalWrite(relay, LOW);
     Serial.println("Current not Flowing");
   }
+}
+
+// temperature
+
+void checkTemperature() {
+  temperature = dht.readTemperature();
+  humidity = dht.readHumidity();
+
+  Serial.print("Temperature = ");
+  Serial.println(temperature);
+
+  Serial.print("Humidity = ");
+  Serial.println(humidity);
 }
 
 // WiFi Connect
@@ -286,6 +392,10 @@ void connect_to_wifi() {
     Serial.print(".");
     delay(500);
 
+    if (wifi_connect_retries % 4 == 0) {
+      checkMoisture();
+    }
+
     wifi_connect_retries++;
 
     if (wifi_connect_retries >= wifi_connect_retries_limit) {
@@ -302,11 +412,15 @@ void connect_to_wifi() {
   }
 
   // When connected
-  if (WiFi.status() != WL_CONNECTED) {
+  if (WiFi.status() == WL_CONNECTED) {
     Serial.println("");
     Serial.println("WiFi connected");
     Serial.println("IP address: ");
     Serial.println(WiFi.localIP());
+    request_timing_count = request_timing_start;
+  } else {
+    Serial.println("");
+    Serial.println("WiFi NOT connected !!!");
   }
 }
 
