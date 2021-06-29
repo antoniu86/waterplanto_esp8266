@@ -3,73 +3,78 @@
 #include "ESP8266HTTPClient.h"
 #include "ArduinoJson.h"
 #include "DHT.h"
+#include "WiFiClientSecure.h"
 
 // CONSTANTS
 
 // SERIAL NUMBER
-#define SERIAL_NUMBER               "WP-0001-0001"
+#define SERIAL_NUMBER                 "WP-0001-0001"
 
 // KEY
-#define KEY                         10021986
+#define KEY                           10021986
 
 // retea
-#define NET_SSID                    "waterplanto"
-#define NET_PASS                    "password"
-#define ENDPOINT_DOMAIN             "http://waterplanto.herokuapp.com"
-#define ENDPOINT_UPDATE             "/device_api/update"
+#define NET_SSID                      "waterplanto"
+#define NET_PASS                      "password"
+#define ENDPOINT_DOMAIN               "https://waterplanto.herokuapp.com"
+#define ENDPOINT_UPDATE               "/device_api/update"
 
 // umiditate a solului
-#define MOISTURE_THRESHOLD          20 // in percent; 0% - 100% humidity => 430 - 120
-#define POMP_RUNNING_TIME           5 // 5 seconds
+#define MOISTURE_THRESHOLD            20 // in percent; 0% - 100% humidity => 430 - 120
+#define POMP_RUNNING_TIME             5 // 5 seconds
 
 // temperatura
-#define DHTTYPE                     DHT22
+#define DHTTYPE                       DHT22
 
 // VARIABLES
 
 // http
-String update_endpoint =            ENDPOINT_DOMAIN + (String)ENDPOINT_UPDATE;
+String update_endpoint =              ENDPOINT_DOMAIN + (String)ENDPOINT_UPDATE;
 
 // network
-const int addr_ssid =               0;  // ssid index
-const int addr_ssid_size =          20; // ssid index size
-const int addr_password =           20; // password index
-const int addr_password_size =      20; // password index size
-const int addr_moisture =           40; // humidity index
-const int addr_pomp =               41; // pomp running time
+const int addr_ssid =                 0;  // ssid index
+const int addr_ssid_size =            20; // ssid index size
+const int addr_password =             20; // password index
+const int addr_password_size =        20; // password index size
+const int addr_moisture =             40; // humidity index
+const int addr_pomp =                 41; // pomp running time
 
-String ssid =                       NET_SSID;
-String password =                   NET_PASS;
+String ssid =                         NET_SSID;
+String password =                     NET_PASS;
 
-int wifi_connect_retries =          0;
-int wifi_connect_retries_limit =    30;
-int default_network_count =         0;
-int default_network_limit =         2;
-bool default_network_flag =         false;
+int wifi_connect_retries =            0;
+int wifi_connect_retries_limit =      20;
+int default_network_count =           0;
+int default_network_limit =           2;
+bool default_network_flag =           false;
 
 // pins
-const int moisture_Pin =            0;
-const int nivel_apa =               1;
-const int relay =                   5;
-const int DHTPin =                  4; 
+const int moisture_Pin =              0;
+const int nivel_apa =                 1;
+const int relay =                     5;
+const int DHTPin =                    4; 
 
 // request
-const int request_timing =          15; // request every 15 seconds
-int request_timing_start =          12;
-int request_timing_count =          request_timing_start;
+const int request_timing =            15; // request every 15 seconds
+int request_timing_start =            12;
+int request_timing_count =            request_timing_start;
 
 // sensors
 // soil
-int moisture_value =                0;
-int moisture_percent =              100;
-int moisture_threshold =            MOISTURE_THRESHOLD;
-const int moisture_threshold_max =  50; // in percent
-const int moisture_max =            130; // max humidity - immersed in watter
-const int moisture_min =            430; // min humidity - perfectly dry
+int moisture_value =                  0;
+int moisture_percent =                100;
+int moisture_threshold =              MOISTURE_THRESHOLD;
+const int moisture_threshold_max =    50; // in percent
+const int moisture_max =              130; // max humidity - immersed in watter
+const int moisture_min =              430; // min humidity - perfectly dry
 
 // pomp
-bool start_pomp =                   false;
-int pomp_running_time =             POMP_RUNNING_TIME;
+bool start_pomp =                     false;
+int pomp_running_time =               POMP_RUNNING_TIME;
+
+bool deep_sleep_enter =               false;
+int deep_sleep_count =                1;
+const int deep_sleep_enter_count =    60;
 
 // DHT22 variables
 float temperature;
@@ -77,8 +82,9 @@ float humidity;
 
 // initialize
 DHT dht(DHTPin, DHTTYPE);
+
 HTTPClient http;
-WiFiClient client;
+WiFiClientSecure client;
 
 void setup() {
   Serial.begin(115200);
@@ -91,7 +97,9 @@ void setup() {
 
   dht.begin();
 
-  delay(1000);
+  delay(100);
+
+  WiFi.mode(WIFI_STA);
 
   Serial.println("");
 
@@ -143,13 +151,17 @@ void setup() {
 
     Serial.println(" / NEW Pomp running time (taken from EEPROM): " + pomp_running_time);
   }
-
-  WiFi.mode(WIFI_STA);
 }
 
 void loop() {
-  //wifi_set_sleep_type(NONE_SLEEP_T);
-  //delay(100);
+  Serial.print("deep_sleep_count = ");
+  Serial.println(deep_sleep_count);
+
+  Serial.print("deep_sleep_enter_count = ");
+  Serial.println(deep_sleep_enter_count);
+
+  Serial.print("deep_sleep_enter = ");
+  Serial.println(deep_sleep_enter);
   
   Serial.print("SSID = ");
   Serial.println(ssid);
@@ -170,9 +182,6 @@ void loop() {
     connect_to_wifi();
   } else {
     default_network_count = 0;
-
-    Serial.print("request_timing_count = ");
-    Serial.println(request_timing_count);
     
     if (request_timing_count >= request_timing) {
       server_request();
@@ -182,15 +191,20 @@ void loop() {
     }
   }
 
+  // Power saving - enter deep sleep
+  if (deep_sleep_enter) {
+    ESP.deepSleep(300e6); // 5 * 60 seconds => 5 minutes
+  } else {
+    deep_sleep_count++;
+  }
+ 
+  if (deep_sleep_count == deep_sleep_enter_count) {
+    deep_sleep_enter = true;
+  }
+
   Serial.println("------------------------------------------");
 
   delay(1000);
- 
-  //wifi_set_sleep_type(LIGHT_SLEEP_T);
-  //delay(4900);
-
-  // put the board to sleep for 5 minutes
-  // ESP.deepSleep(5e6);
 }
 
 // request
@@ -293,6 +307,8 @@ String http_request_update() {
   int square = random(11, 20);
   int triangle = random(21, 30);
   int key = calculate_key(circle, square, triangle);
+
+  client.setInsecure();
   
   http.begin(client, update_endpoint + "?code=" + (String)SERIAL_NUMBER + "&ci=" + circle + "&sq=" + square + "&tr=" + triangle + "&soil=" + moisture_percent + "&temperature=" + temperature + "&humidity=" + humidity);
   http.addHeader("Content-Type", "application/x-www-form-urlencoded");
@@ -320,33 +336,54 @@ String http_request_update() {
 
 // soil humidity
 
-void checkMoisture() {
+void readMoisture() {
   moisture_value = analogRead(moisture_Pin);
   moisture_percent = abs((((double)(moisture_value - moisture_max) / (moisture_min - moisture_max)) * 100) - 100);
-  
+
   Serial.print("Soil humidity: ");
   Serial.println(moisture_value);
 
   Serial.print("Soil humidity %: ");
   Serial.println(moisture_percent);
+}
 
+void pompStart() {
+  digitalWrite(relay, HIGH);
+  Serial.println("Pomp Start - Current Flowing");
+}
+
+void pompStop() {
+  digitalWrite(relay, LOW);
+  Serial.println("Pomp Stop - Current not Flowing");
+}
+
+void checkMoisture() {
   if (start_pomp) {
+    // manual start
     Serial.println("Start water pomp");
     Serial.print("For (seconds) = ");
     Serial.println(pomp_running_time);
-    digitalWrite(relay, HIGH);
+
+    pompStart();
+    
     delay(pomp_running_time * 1000);
     Serial.println("Water stop and resume execution");
     start_pomp = false;
-    digitalWrite(relay, LOW);
-  }
 
-  if (moisture_percent < moisture_threshold){
-    digitalWrite(relay, HIGH);
-    Serial.println("Current Flowing");
+    pompStop();
   } else {
-    digitalWrite(relay, LOW);
-    Serial.println("Current not Flowing");
+    // autostart if condition
+    if (moisture_percent > 10 && moisture_percent < moisture_threshold){
+      pompStart();
+  
+      // block code in this loop
+      while (moisture_percent < moisture_threshold) {
+        readMoisture();
+        delay(500);
+      }
+  
+      pompStop();
+    }
   }
 }
 
