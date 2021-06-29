@@ -74,7 +74,8 @@ int pomp_running_time =               POMP_RUNNING_TIME;
 
 bool deep_sleep_enter =               false;
 int deep_sleep_count =                1;
-const int deep_sleep_enter_count =    60;
+const int deep_sleep_enter_count =    30;
+const int sleep_time =                (5 * 60 * 1000);
 
 // DHT22 variables
 float temperature;
@@ -88,6 +89,18 @@ WiFiClientSecure client;
 
 void setup() {
   Serial.begin(115200);
+
+//  // power soil sensor
+//  pinMode(0, OUTPUT);
+//  digitalWrite(0, HIGH);
+//
+//  // power relay
+//  pinMode(2, OUTPUT);
+//  digitalWrite(2, HIGH);
+//
+//    // power DHT22
+//  pinMode(14, OUTPUT);
+//  digitalWrite(14, HIGH);
 
   // pinul pentru releu
   pinMode(relay, OUTPUT);
@@ -141,6 +154,26 @@ void loop() {
 
   // Power saving - enter deep sleep
   if (deep_sleep_enter) {
+//    digitalWrite(0, LOW);
+//    digitalWrite(2, LOW);
+//    digitalWrite(14, LOW);
+//
+//    //WiFi.forceSleepBegin();
+//    wifi_set_sleep_type(LIGHT_SLEEP_T);
+//
+//    Serial.println("sleep");
+//
+//    delay(5000);
+//
+//    Serial.println("wake up");
+//
+//    //WiFi.forceSleepWake();
+//    wifi_set_sleep_type(NONE_SLEEP_T);
+//
+//    digitalWrite(0, HIGH);
+//    digitalWrite(2, HIGH);
+//    digitalWrite(14, HIGH);
+    
     Serial.println("Enter Deep Sleep");
     ESP.deepSleep(300e6); // 5 * 60 seconds => 5 minutes
   } else {
@@ -321,8 +354,10 @@ void checkMoisture() {
 
     pompStop();
   } else {
+    readMoisture();
+    
     // autostart if condition
-    if (moisture_percent > 10 && moisture_percent < moisture_threshold){
+    if (moisture_percent != 0 && moisture_percent < moisture_threshold){
       pompStart();
   
       // block code in this loop
