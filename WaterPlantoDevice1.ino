@@ -102,66 +102,14 @@ void setup() {
   WiFi.mode(WIFI_STA);
 
   Serial.println("");
+  Serial.println("Read from EEPROM");
 
-  // Read from EEPROM
-  EEPROM.begin(512);
-  String ssid_read;
-  for (int k = addr_ssid; k < addr_ssid + addr_ssid_size; k++) {
-    ssid_read += char(EEPROM.read(k));
-  }
-
-  String password_read;
-  for (int l = addr_password; l < addr_password + addr_password_size; l++) {
-    password_read += char(EEPROM.read(l));
-  }
-
-  int moisture_threshold_read = EEPROM.read(addr_moisture);
-  int pomp_running_time_read = EEPROM.read(addr_pomp);
-  EEPROM.end();
-
-  // set ssid and password if needed
-  if ((ssid_read != "" && ssid_read != ssid) && (password_read != "" && password_read != password)) {
-    Serial.println("SSID and Password from EEPROM diferent");
-    Serial.print("SSID: " + ssid);
-    Serial.println(" / Password: " + password);
-    
-    ssid = ssid_read;
-    password = password_read;
-
-    Serial.print("NEW SSID (taken from EEPROM): " + ssid);
-    Serial.println(" / NEW Password (taken from EEPROM): " + password);
-  }
-
-  // set moisture threashold
-  if (moisture_threshold_read) {
-    Serial.println("Moisture threshold from EEPROM different");
-    Serial.print("Moisture threshold: " + moisture_threshold);
-    
-    moisture_threshold = (int)moisture_threshold_read;
-
-    Serial.println(" / NEW Moisture threshold (taken from EEPROM): " + moisture_threshold);
-  }
-
-  // set pomp running time
-  if (pomp_running_time_read) {
-    Serial.println("Pomp running time from EEPROM different");
-    Serial.print("Pomp running time: " + pomp_running_time);
-    
-    pomp_running_time = (int)pomp_running_time_read;
-
-    Serial.println(" / NEW Pomp running time (taken from EEPROM): " + pomp_running_time);
-  }
+  readMemory();
 }
 
 void loop() {
   Serial.print("deep_sleep_count = ");
   Serial.println(deep_sleep_count);
-
-  Serial.print("deep_sleep_enter_count = ");
-  Serial.println(deep_sleep_enter_count);
-
-  Serial.print("deep_sleep_enter = ");
-  Serial.println(deep_sleep_enter);
   
   Serial.print("SSID = ");
   Serial.println(ssid);
@@ -174,14 +122,12 @@ void loop() {
 
   Serial.print("Pomp running time = ");
   Serial.println(pomp_running_time);
-
-  checkMoisture();
-  checkTemperature();
   
   if (WiFi.status() != WL_CONNECTED) {
     connect_to_wifi();
   } else {
-    default_network_count = 0;
+    checkMoisture();
+    checkTemperature();
     
     if (request_timing_count >= request_timing) {
       server_request();
@@ -189,10 +135,13 @@ void loop() {
     } else {
       request_timing_count += 1;
     }
+
+    default_network_count = 0;
   }
 
   // Power saving - enter deep sleep
   if (deep_sleep_enter) {
+    Serial.println("Enter Deep Sleep");
     ESP.deepSleep(300e6); // 5 * 60 seconds => 5 minutes
   } else {
     deep_sleep_count++;
@@ -310,11 +259,11 @@ String http_request_update() {
 
   client.setInsecure();
   
-  http.begin(client, update_endpoint + "?code=" + (String)SERIAL_NUMBER + "&ci=" + circle + "&sq=" + square + "&tr=" + triangle + "&soil=" + moisture_percent + "&temperature=" + temperature + "&humidity=" + humidity);
+  http.begin(client, update_endpoint);
   http.addHeader("Content-Type", "application/x-www-form-urlencoded");
   http.addHeader("Token", "Key " + (String)key);
   
-  int httpResponseCode = http.GET();
+  int httpResponseCode = http.POST("code=" + (String)SERIAL_NUMBER + "&ci=" + circle + "&sq=" + square + "&tr=" + triangle + "&soil=" + moisture_percent + "&temperature=" + temperature + "&humidity=" + humidity);
 
   String payload = "{}";
   
@@ -465,6 +414,45 @@ void connect_to_wifi() {
 
 int calculate_key(int circle, int square, int triangle) {
   return (int)(((KEY * triangle) / (square * circle)) / (triangle + circle - square));
+}
+
+// read variable from EEPROM
+
+void readMemory() {
+  EEPROM.begin(512);
+
+  // set ssid and password if needed
+  String ssid_read;
+  String password_read;
+  
+  for (int k = addr_ssid; k < addr_ssid + addr_ssid_size; k++) {
+    ssid_read += char(EEPROM.read(k));
+  }
+  
+  for (int l = addr_password; l < addr_password + addr_password_size; l++) {
+    password_read += char(EEPROM.read(l));
+  }
+  
+  if ((ssid_read != "" && ssid_read != ssid) && (password_read != "" && password_read != password)) {
+    ssid = ssid_read;
+    password = password_read;
+  }
+
+  // set moisture threashold
+  int moisture_threshold_read = EEPROM.read(addr_moisture);
+  
+  if (moisture_threshold_read) {
+    moisture_threshold = (int)moisture_threshold_read;
+  }
+
+  // set pomp running time
+  int pomp_running_time_read = EEPROM.read(addr_pomp);
+  
+  if (pomp_running_time_read) {
+    pomp_running_time = (int)pomp_running_time_read;
+  }
+
+  EEPROM.end();
 }
 
 // erase EEPROM memory
